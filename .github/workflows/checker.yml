@@ -3,7 +3,7 @@ name: ICAI Indore Batch Check
 on:
   schedule:
     # Runs every 4 hours automatically
-    - cron: '0 */4 * * *'
+    - cron: '17 */4 * * *'
   workflow_dispatch: # Allows manual trigger anytime from GitHub
 
 jobs:
