@@ -22,7 +22,8 @@ def send_telegram(message):
         "disable_web_page_preview": True
     }
     try:
-        requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        print(f"Telegram status: {response.status_code}")
     except Exception as e:
         print(f"Telegram error: {e}")
 
@@ -107,7 +108,8 @@ def run():
         }""")
         page.wait_for_timeout(4000)
 
-        alerts = []
+        results = {}
+        has_open_seats = False
 
         js_select_course = """(courseTarget) => {
             const selects = Array.from(document.querySelectorAll('select'));
@@ -135,21 +137,28 @@ def run():
             page.wait_for_timeout(4000)
 
             seats = count_open_seats(page)
+            results[course] = seats
             print(f"[{course}] Available seats: {seats}")
 
             if seats > 0:
-                alerts.append(f"• {course}: {seats} seat(s) available")
+                has_open_seats = True
 
         browser.close()
 
-        if alerts:
-            msg = "🚨 ICAI INDORE BATCH ALERT! 🚨\n\n"
-            msg += "\n".join(alerts)
-            msg += "\n\nRegister immediately: https://www.icaionlineregistration.org/launchbatchdetail.aspx"
-            send_telegram(msg)
-            print("Telegram alert sent!")
+        # Build message for every check
+        if has_open_seats:
+            msg = "🚨 ICAI INDORE BATCH ALERT! SEATS OPEN! 🚨\n\n"
         else:
-            print("Finished checking. Indore batches currently have 0 seats.")
+            msg = "📊 ICAI Indore Batch Status Update:\n\n"
+
+        for course, seats in results.items():
+            short_name = "MCS" if "MCS" in course else "Adv ITT"
+            msg += f"• {short_name}: {seats} seats available\n"
+
+        msg += "\n🔗 Portal: https://www.icaionlineregistration.org/launchbatchdetail.aspx"
+
+        send_telegram(msg)
+        print("Telegram status update sent successfully.")
 
 if __name__ == "__main__":
     run()
