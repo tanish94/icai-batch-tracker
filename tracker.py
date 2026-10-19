@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -11,18 +12,21 @@ COURSES = [
 ]
 
 def send_telegram(message):
+    if not BOT_TOKEN or not CHAT_ID:
+        print("Telegram credentials not found. Skipping Telegram send.")
+        return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": message,
         "disable_web_page_preview": True
     }
-    requests.post(url, json=payload)
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Telegram error: {e}")
 
 def count_open_seats(page):
-    """
-    Parses table rows and extracts numeric values from the 'Available Seats' column.
-    """
     return page.evaluate("""() => {
         const rows = document.querySelectorAll("tr");
         let seatColIdx = -1;
@@ -52,30 +56,78 @@ def count_open_seats(page):
 
 def run():
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto("https://www.icaionlineregistration.org/launchbatchdetail.aspx", timeout=60000)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled"
+            ]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800}
+        )
+        page = context.new_page()
 
-        # 1. Select Region -> Central
-        page.select_option("select[id*='Region'], select[name*='Region']", label="Central")
-        page.wait_for_timeout(3000)
+        print("Navigating to ICAI portal...")
+        page.goto("https://www.icaionlineregistration.org/launchbatchdetail.aspx", timeout=60000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
 
-        # 2. Select POU -> Indore
-        page.select_option("select[id*='Pou'], select[name*='Pou'], select[id*='POU']", label="Indore")
-        page.wait_for_timeout(3000)
+        print("Selecting Region: Central...")
+        page.evaluate("""() => {
+            const selects = Array.from(document.querySelectorAll('select'));
+            const region = selects.find(s => (s.id + s.name).toLowerCase().includes('region'));
+            if (!region) return;
+            for (let i = 0; i < region.options.length; i++) {
+                if (region.options[i].text.toLowerCase().includes('central')) {
+                    region.selectedIndex = i;
+                    if (typeof region.onchange === 'function') region.onchange();
+                    else if (typeof window.__doPostBack === 'function') window.__doPostBack(region.name, '');
+                    break;
+                }
+            }
+        }""")
+        page.wait_for_timeout(4000)
+
+        print("Selecting POU: Indore...")
+        page.evaluate("""() => {
+            const selects = Array.from(document.querySelectorAll('select'));
+            const pou = selects.find(s => (s.id + s.name).toLowerCase().includes('pou'));
+            if (!pou) return;
+            for (let i = 0; i < pou.options.length; i++) {
+                if (pou.options[i].text.toLowerCase().includes('indore')) {
+                    pou.selectedIndex = i;
+                    if (typeof pou.onchange === 'function') pou.onchange();
+                    else if (typeof window.__doPostBack === 'function') window.__doPostBack(pou.name, '');
+                    break;
+                }
+            }
+        }""")
+        page.wait_for_timeout(4000)
 
         alerts = []
 
-        # 3. Check both MCS and Adv ITT
         for course in COURSES:
-            page.select_option("select[id*='Course'], select[name*='Course']", label=course)
-            page.wait_for_timeout(2000)
+            print(f"Checking course: {course}...")
+            page.evaluate(f"""(courseTarget) => {{
+                const selects = Array.from(document.querySelectorAll('select'));
+                const cSelect = selects.find(s => (s.id + s.name).toLowerCase().includes('course'));
+                if (!cSelect) return;
+                for (let i = 0; i < cSelect.options.length; i++) {
+                    if (cSelect.options[i].text.toLowerCase().includes(courseTarget.toLowerCase().slice(0, 15))) {
+                        cSelect.selectedIndex = i;
+                        break;
+                    }
+                }
+            }}""", course)
+            page.wait_for_timeout(1000)
 
-            # Click Get List if present
-            get_list_btn = page.query_selector("input[value*='Get List'], button[value*='Get List']")
-            if get_list_btn:
-                get_list_btn.click()
-                page.wait_for_timeout(3000)
+            page.evaluate("""() => {
+                const btn = Array.from(document.querySelectorAll('input, button')).find(el => (el.value || el.innerText || '').toLowerCase().includes('get list'));
+                if (btn) btn.click();
+            }""")
+            page.wait_for_timeout(4000)
 
             seats = count_open_seats(page)
             print(f"[{course}] Available seats: {seats}")
@@ -86,13 +138,13 @@ def run():
         browser.close()
 
         if alerts:
-            message = "🚨 ICAI INDORE BATCH ALERT! 🚨\n\n"
-            message += "\n".join(alerts)
-            message += "\n\nRegister immediately: https://www.icaionlineregistration.org/launchbatchdetail.aspx"
-            send_telegram(message)
-            print("Alert notification sent to Telegram.")
+            msg = "🚨 ICAI INDORE BATCH ALERT! 🚨\n\n"
+            msg += "\n".join(alerts)
+            msg += "\n\nRegister immediately: https://www.icaionlineregistration.org/launchbatchdetail.aspx"
+            send_telegram(msg)
+            print("Telegram alert sent!")
         else:
-            print("No seats open at this time.")
+            print("Finished checking. Indore batches currently have 0 seats.")
 
 if __name__ == "__main__":
     run()
