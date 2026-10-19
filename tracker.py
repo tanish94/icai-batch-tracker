@@ -27,7 +27,7 @@ def send_telegram(message):
         print(f"Telegram error: {e}")
 
 def count_open_seats(page):
-    return page.evaluate("""() => {
+    js_code = """() => {
         const rows = document.querySelectorAll("tr");
         let seatColIdx = -1;
         let totalSeats = 0;
@@ -52,7 +52,8 @@ def count_open_seats(page):
             }
         }
         return totalSeats;
-    }""")
+    }"""
+    return page.evaluate(js_code)
 
 def run():
     with sync_playwright() as p:
@@ -108,25 +109,29 @@ def run():
 
         alerts = []
 
+        js_select_course = """(courseTarget) => {
+            const selects = Array.from(document.querySelectorAll('select'));
+            const cSelect = selects.find(s => (s.id + s.name).toLowerCase().includes('course'));
+            if (!cSelect) return;
+            for (let i = 0; i < cSelect.options.length; i++) {
+                if (cSelect.options[i].text.toLowerCase().includes(courseTarget.toLowerCase().slice(0, 15))) {
+                    cSelect.selectedIndex = i;
+                    break;
+                }
+            }
+        }"""
+
+        js_click_get_list = """() => {
+            const btn = Array.from(document.querySelectorAll('input, button')).find(el => (el.value || el.innerText || '').toLowerCase().includes('get list'));
+            if (btn) btn.click();
+        }"""
+
         for course in COURSES:
             print(f"Checking course: {course}...")
-            page.evaluate(f"""(courseTarget) => {{
-                const selects = Array.from(document.querySelectorAll('select'));
-                const cSelect = selects.find(s => (s.id + s.name).toLowerCase().includes('course'));
-                if (!cSelect) return;
-                for (let i = 0; i < cSelect.options.length; i++) {
-                    if (cSelect.options[i].text.toLowerCase().includes(courseTarget.toLowerCase().slice(0, 15))) {
-                        cSelect.selectedIndex = i;
-                        break;
-                    }
-                }
-            }}""", course)
+            page.evaluate(js_select_course, course)
             page.wait_for_timeout(1000)
 
-            page.evaluate("""() => {
-                const btn = Array.from(document.querySelectorAll('input, button')).find(el => (el.value || el.innerText || '').toLowerCase().includes('get list'));
-                if (btn) btn.click();
-            }""")
+            page.evaluate(js_click_get_list)
             page.wait_for_timeout(4000)
 
             seats = count_open_seats(page)
