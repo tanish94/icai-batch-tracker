@@ -29,26 +29,20 @@ def send_telegram(message):
 
 def count_open_seats(page):
     js_code = """() => {
-        const rows = document.querySelectorAll("tr");
-        let seatColIdx = -1;
         let totalSeats = 0;
+        const allRows = document.querySelectorAll("tr");
 
-        for (let r = 0; r < rows.length; r++) {
-            const cells = rows[r].children;
-            if (seatColIdx === -1) {
-                for (let c = 0; c < cells.length; c++) {
-                    const txt = cells[c].innerText.trim().toLowerCase();
-                    if (txt.includes("available seats") || (txt.includes("available") && txt.includes("seat"))) {
-                        seatColIdx = c;
-                        break;
-                    }
-                }
-            } else {
-                if (cells.length > seatColIdx) {
-                    const val = parseInt(cells[seatColIdx].innerText.trim(), 10);
-                    if (!isNaN(val) && val > 0) {
-                        totalSeats += val;
-                    }
+        for (const row of allRows) {
+            const cells = Array.from(row.querySelectorAll("td, th"));
+            if (cells.length < 3) continue;
+
+            const textFirstCol = cells[0].innerText.trim();
+            // Match batch rows like AdvICITSSMCS__INDORE_77
+            if (textFirstCol.toLowerCase().includes("indore") || textFirstCol.toLowerCase().includes("advicitss")) {
+                const seatText = cells[1].innerText.trim();
+                const seats = parseInt(seatText, 10);
+                if (!isNaN(seats) && seats > 0) {
+                    totalSeats += seats;
                 }
             }
         }
@@ -145,7 +139,6 @@ def run():
 
         browser.close()
 
-        # Build message for every check
         if has_open_seats:
             msg = "🚨 ICAI INDORE BATCH ALERT! SEATS OPEN! 🚨\n\n"
         else:
@@ -155,7 +148,7 @@ def run():
             short_name = "MCS" if "MCS" in course else "Adv ITT"
             msg += f"• {short_name}: {seats} seats available\n"
 
-        msg += "\n🔗 Portal: https://www.icaionlineregistration.org/launchbatchdetail.aspx"
+        msg += "\n🔗 Register here: https://www.icaionlineregistration.org/launchbatchdetail.aspx"
 
         send_telegram(msg)
         print("Telegram status update sent successfully.")
