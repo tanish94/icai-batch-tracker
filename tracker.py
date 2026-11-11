@@ -7,48 +7,23 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 COURSES = [
-    "Advanced (ICITSS) MCS Course",
-    "AICITSS - Advanced Information Technology"
+    ("MCS", "Advanced (ICITSS) MCS Course"),
+    ("Adv ITT", "AICITSS - Advanced Information Technology")
 ]
 
-def send_telegram(message):
+def send_telegram_photo(photo_path, caption):
     if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram credentials not found. Skipping Telegram send.")
+        print("Telegram credentials missing.")
         return
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "disable_web_page_preview": True
-    }
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        print(f"Telegram status: {response.status_code}")
+        with open(photo_path, "rb") as f:
+            files = {"photo": f}
+            data = {"chat_id": CHAT_ID, "caption": caption}
+            res = requests.post(url, files=files, data=data, timeout=30)
+            print(f"Telegram photo sent: {res.status_code}")
     except Exception as e:
-        print(f"Telegram error: {e}")
-
-def count_open_seats(page):
-    js_code = """() => {
-        let totalSeats = 0;
-        const allRows = document.querySelectorAll("tr");
-
-        for (const row of allRows) {
-            const cells = Array.from(row.querySelectorAll("td, th"));
-            if (cells.length < 3) continue;
-
-            const textFirstCol = cells[0].innerText.trim();
-            // Match batch rows like AdvICITSSMCS__INDORE_77
-            if (textFirstCol.toLowerCase().includes("indore") || textFirstCol.toLowerCase().includes("advicitss")) {
-                const seatText = cells[1].innerText.trim();
-                const seats = parseInt(seatText, 10);
-                if (!isNaN(seats) && seats > 0) {
-                    totalSeats += seats;
-                }
-            }
-        }
-        return totalSeats;
-    }"""
-    return page.evaluate(js_code)
+        print(f"Error sending photo to Telegram: {e}")
 
 def run():
     with sync_playwright() as p:
@@ -62,7 +37,7 @@ def run():
         )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
+            viewport={"width": 1280, "height": 900}
         )
         page = context.new_page()
 
@@ -70,6 +45,7 @@ def run():
         page.goto("https://www.icaionlineregistration.org/launchbatchdetail.aspx", timeout=60000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
 
+        # 1. Select Region -> Central
         print("Selecting Region: Central...")
         page.evaluate("""() => {
             const selects = Array.from(document.querySelectorAll('select'));
@@ -84,8 +60,9 @@ def run():
                 }
             }
         }""")
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(5000)
 
+        # 2. Select POU -> Indore
         print("Selecting POU: Indore...")
         page.evaluate("""() => {
             const selects = Array.from(document.querySelectorAll('select'));
@@ -100,10 +77,7 @@ def run():
                 }
             }
         }""")
-        page.wait_for_timeout(4000)
-
-        results = {}
-        has_open_seats = False
+        page.wait_for_timeout(5000)
 
         js_select_course = """(courseTarget) => {
             const selects = Array.from(document.querySelectorAll('select'));
@@ -122,36 +96,25 @@ def run():
             if (btn) btn.click();
         }"""
 
-        for course in COURSES:
-            print(f"Checking course: {course}...")
+        # 3. Check each course, wait for table rendering, take screenshot and send
+        for label, course in COURSES:
+            print(f"Checking {label}...")
             page.evaluate(js_select_course, course)
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1500)
 
             page.evaluate(js_click_get_list)
-            page.wait_for_timeout(4000)
+            # Give ASP.NET UpdatePanel enough time to complete AJAX callback
+            page.wait_for_timeout(6000)
 
-            seats = count_open_seats(page)
-            results[course] = seats
-            print(f"[{course}] Available seats: {seats}")
+            screenshot_file = f"{label.replace(' ', '_').lower()}.png"
+            page.screenshot(path=screenshot_file, full_page=False)
 
-            if seats > 0:
-                has_open_seats = True
+            caption = f"📸 ICAI Indore Batch Status: {label}\n🔗 https://www.icaionlineregistration.org/launchbatchdetail.aspx"
+            send_telegram_photo(screenshot_file, caption)
+            page.wait_for_timeout(1000)
 
         browser.close()
-
-        if has_open_seats:
-            msg = "🚨 ICAI INDORE BATCH ALERT! SEATS OPEN! 🚨\n\n"
-        else:
-            msg = "📊 ICAI Indore Batch Status Update:\n\n"
-
-        for course, seats in results.items():
-            short_name = "MCS" if "MCS" in course else "Adv ITT"
-            msg += f"• {short_name}: {seats} seats available\n"
-
-        msg += "\n🔗 Register here: https://www.icaionlineregistration.org/launchbatchdetail.aspx"
-
-        send_telegram(msg)
-        print("Telegram status update sent successfully.")
+        print("Finished sending screenshots.")
 
 if __name__ == "__main__":
     run()
