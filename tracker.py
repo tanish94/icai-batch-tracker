@@ -42,10 +42,10 @@ def run():
         page = context.new_page()
 
         print("Navigating to ICAI portal...")
-        page.goto("https://www.icaionlineregistration.org/launchbatchdetail.aspx", timeout=60000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
+        page.goto("https://www.icaionlineregistration.org/launchbatchdetail.aspx", timeout=60000, wait_until="networkidle")
+        page.wait_for_timeout(3000)
 
-        # 1. Select Region -> Central
+        # 1. Select Region: Central
         print("Selecting Region: Central...")
         page.evaluate("""() => {
             const selects = Array.from(document.querySelectorAll('select'));
@@ -60,9 +60,11 @@ def run():
                 }
             }
         }""")
-        page.wait_for_timeout(5000)
+        # Wait for the postback to populate POU dropdown
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(4000)
 
-        # 2. Select POU -> Indore
+        # 2. Select POU: Indore
         print("Selecting POU: Indore...")
         page.evaluate("""() => {
             const selects = Array.from(document.querySelectorAll('select'));
@@ -77,34 +79,49 @@ def run():
                 }
             }
         }""")
-        page.wait_for_timeout(5000)
+        # Wait for postback after POU change
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(4000)
 
-        js_select_course = """(courseTarget) => {
-            const selects = Array.from(document.querySelectorAll('select'));
-            const cSelect = selects.find(s => (s.id + s.name).toLowerCase().includes('course'));
-            if (!cSelect) return;
-            for (let i = 0; i < cSelect.options.length; i++) {
-                if (cSelect.options[i].text.toLowerCase().includes(courseTarget.toLowerCase().slice(0, 15))) {
-                    cSelect.selectedIndex = i;
-                    break;
-                }
-            }
-        }"""
-
-        js_click_get_list = """() => {
-            const btn = Array.from(document.querySelectorAll('input, button')).find(el => (el.value || el.innerText || '').toLowerCase().includes('get list'));
-            if (btn) btn.click();
-        }"""
-
-        # 3. Check each course, wait for table rendering, take screenshot and send
+        # 3. For each course, select, trigger 'Get List', wait for results, and screenshot
         for label, course in COURSES:
-            print(f"Checking {label}...")
-            page.evaluate(js_select_course, course)
-            page.wait_for_timeout(1500)
+            print(f"Selecting course: {course}...")
+            page.evaluate("""(courseTarget) => {
+                const selects = Array.from(document.querySelectorAll('select'));
+                const cSelect = selects.find(s => (s.id + s.name).toLowerCase().includes('course'));
+                if (!cSelect) return;
+                for (let i = 0; i < cSelect.options.length; i++) {
+                    if (cSelect.options[i].text.toLowerCase().includes(courseTarget.toLowerCase().slice(0, 15))) {
+                        cSelect.selectedIndex = i;
+                        if (typeof cSelect.onchange === 'function') cSelect.onchange();
+                        break;
+                    }
+                }
+            }""", course)
+            page.wait_for_timeout(2000)
 
-            page.evaluate(js_click_get_list)
-            # Give ASP.NET UpdatePanel enough time to complete AJAX callback
-            page.wait_for_timeout(6000)
+            print(f"Clicking Get List for {label}...")
+            # Click Get List using native locator
+            btn = page.locator("input[value*='Get List'], input[value*='get list'], button:has-text('Get List')").first
+            if btn.count() > 0:
+                btn.click()
+            else:
+                # Fallback JS trigger
+                page.evaluate("""() => {
+                    const b = Array.from(document.querySelectorAll('input, button')).find(el => (el.value || el.innerText || '').toLowerCase().includes('get list'));
+                    if (b) b.click();
+                }""")
+
+            # Crucial: Wait for the network calls to settle and the table rows to populate
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(5000)
+
+            # Scroll slightly to center the table neatly in the screenshot
+            page.evaluate("""() => {
+                const table = document.querySelector('table[id*="grid"], table[id*="Grid"], table.table, table');
+                if (table) table.scrollIntoView({behavior: 'instant', block: 'center'});
+            }""")
+            page.wait_for_timeout(1000)
 
             screenshot_file = f"{label.replace(' ', '_').lower()}.png"
             page.screenshot(path=screenshot_file, full_page=False)
@@ -112,9 +129,3 @@ def run():
             caption = f"📸 ICAI Indore Batch Status: {label}\n🔗 https://www.icaionlineregistration.org/launchbatchdetail.aspx"
             send_telegram_photo(screenshot_file, caption)
             page.wait_for_timeout(1000)
-
-        browser.close()
-        print("Finished sending screenshots.")
-
-if __name__ == "__main__":
-    run()
