@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 import requests
 from playwright.sync_api import sync_playwright
 
@@ -47,37 +48,52 @@ def tg_photo(path, caption):
 
 
 # ---------- Page helpers ----------
-def choose(page, keyword, wanted):
-    """Pick the <select> whose id/name contains `keyword`, choose the option containing `wanted`."""
-    sel_id = page.evaluate(
-        """(kw) => {
-            const s = Array.from(document.querySelectorAll('select'))
-                .find(s => (s.id + ' ' + s.name).toLowerCase().includes(kw));
-            return s ? s.id : null;
-        }""",
-        keyword,
-    )
-    if not sel_id:
-        raise RuntimeError(f"No dropdown found for '{keyword}'")
+FIND_JS = """([w, key]) => {
+    const sels = Array.from(document.querySelectorAll('select'));
+    const opts = s => Array.from(s.options);
+    let s = sels.find(s => opts(s).some(o => o.text.trim().toLowerCase() === w));
+    if (!s) s = sels.find(s => opts(s).some(o => o.text.toLowerCase().includes(w)));
+    if (!s) return null;
+    const o = opts(s).find(o => o.text.trim().toLowerCase() === w)
+           || opts(s).find(o => o.text.toLowerCase().includes(w));
+    s.setAttribute('data-tk', key);
+    return o.text;
+}"""
 
-    # Wait until the option exists (POU only fills after Region postback)
-    page.wait_for_function(
-        """([id, w]) => {
-            const s = document.getElementById(id);
-            return s && Array.from(s.options).some(o => o.text.toLowerCase().includes(w));
-        }""",
-        arg=[sel_id, wanted.lower()],
-        timeout=30000,
-    )
-    label = page.evaluate(
-        """([id, w]) => Array.from(document.getElementById(id).options)
-            .find(o => o.text.toLowerCase().includes(w)).text""",
-        [sel_id, wanted.lower()],
-    )
-    page.select_option(f'[id="{sel_id}"]', label=label)
-    page.wait_for_load_state("networkidle")
-    page.wait_for_timeout(2500)  # let the ASP.NET postback finish
-    print(f"Selected {keyword}: {label}")
+DUMP_JS = """() => Array.from(document.querySelectorAll('select')).map(s =>
+    (s.id || s.name || '?') + ' [' + Array.from(s.options).slice(0, 4).map(o => o.text.trim()).join(', ') + ']')"""
+
+
+def choose(page, wanted, name):
+    """Find the <select> that contains an option matching `wanted` (searches iframes too) and pick it."""
+    key = "tk_" + name
+    end = time.time() + 40
+    while time.time() < end:
+        for fr in page.frames:
+            try:
+                text = fr.evaluate(FIND_JS, [wanted.lower(), key])
+            except Exception:
+                continue
+            if text:
+                fr.select_option(f'select[data-tk="{key}"]', label=text)
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(2500)  # let the ASP.NET postback finish
+                print(f"Selected {name}: {text}")
+                return fr
+        page.wait_for_timeout(1000)
+
+    # Not found: report what the page actually contains
+    info = []
+    for fr in page.frames:
+        try:
+            info.append(f"frame {fr.url}: {fr.evaluate(DUMP_JS)}")
+        except Exception:
+            pass
+    try:
+        body = page.inner_text("body")[:300].replace("\n", " ")
+    except Exception:
+        body = ""
+    raise RuntimeError(f"No dropdown with option '{wanted}' ({name}). Selects: {info} | Page text: {body}")
 
 
 def get_tables(page):
@@ -133,17 +149,19 @@ def check_course(browser, label, course):
                     raise
         page.wait_for_load_state("networkidle")
 
-        choose(page, "region", REGION)
-        choose(page, "pou", POU)
-        choose(page, "course", course)
+        choose(page, REGION, "region")
+        choose(page, POU, "pou")
+        fr = choose(page, course, "course")
 
-        btn = page.locator("input[value*='Get List' i], button:has-text('Get List')").first
+        btn = fr.locator(
+            "input[value*='Get List' i], input[value*='Show' i], input[type='submit'], button:has-text('Get List')"
+        ).first
         btn.click()
         page.wait_for_load_state("networkidle")
 
         # wait for a results table (or give it a fixed grace period)
         try:
-            page.wait_for_function(
+            fr.wait_for_function(
                 """() => Array.from(document.querySelectorAll('table')).some(t =>
                     !t.querySelector('table') && t.querySelectorAll('tr').length >= 2 &&
                     t.querySelectorAll('tr')[1].querySelectorAll('td').length >= 3)""",
@@ -157,7 +175,7 @@ def check_course(browser, label, course):
         with open(f"debug_{tag}.html", "w", encoding="utf-8") as f:
             f.write(page.content())
 
-        tables = get_tables(page)
+        tables = get_tables(fr)
         if not tables:
             body = page.inner_text("body")
             print("No table found. Page text:\n", body[:1500])
