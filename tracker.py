@@ -243,7 +243,9 @@ def main():
                 print(f"[{label}] no change")
                 if ALWAYS_NOTIFY:
                     open_n = sum(1 for b in res["batches"] if (b["seats"] or 0) > 0)
-                    lines = [f"✅ {label} – Indore: no change ({len(current)} batches, {open_n} with seats)"]
+                    icon = "⚪" if not current else ("🔴" if open_n == 0 else "🟡")
+                    status = "no batches listed" if not current else f"{len(current)} batch(es), {open_n} with seats"
+                    lines = [f"{icon} {label} – Indore: no change ({status})"]
                     lines += [" | ".join(b["row"]) for b in res["batches"]]
                     tg_text("\n".join(lines))
 
