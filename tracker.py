@@ -11,6 +11,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 FORCE = os.getenv("FORCE_NOTIFY", "").lower() == "true"
 STATE_FILE = "state.json"
+ALWAYS_NOTIFY = True  # True = message every run even if nothing changed; False = only on changes
 
 REGION = "central"
 POU = "indore"
@@ -240,6 +241,11 @@ def main():
                 tg_text(f"🔔 ICAI Indore – {label}\n\n" + "\n\n".join(alerts) + f"\n\n{URL}")
             else:
                 print(f"[{label}] no change")
+                if ALWAYS_NOTIFY:
+                    open_n = sum(1 for b in res["batches"] if (b["seats"] or 0) > 0)
+                    lines = [f"✅ {label} – Indore: no change ({len(current)} batches, {open_n} with seats)"]
+                    lines += [" | ".join(b["row"]) for b in res["batches"]]
+                    tg_text("\n".join(lines))
 
             state[label] = current
 
