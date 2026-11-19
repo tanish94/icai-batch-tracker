@@ -2,7 +2,7 @@ name: ICAI Indore Batch Check
 
 on:
   schedule:
-    - cron: '37 * * * *'
+    - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
       force_notify:
@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write   # needed to save state.json back to the repo
+  actions: write    # needed to re-enable this workflow (keeps GitHub from auto-disabling it)
 
 jobs:
   check-batches:
@@ -45,6 +46,12 @@ jobs:
             debug_*.png
             debug_*.html
           if-no-files-found: ignore
+
+      - name: Keep schedule alive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow enable "${{ github.workflow }}" || true
 
       - name: Save state
         if: always()
