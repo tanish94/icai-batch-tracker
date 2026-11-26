@@ -11,7 +11,8 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 FORCE = os.getenv("FORCE_NOTIFY", "").lower() == "true"
 STATE_FILE = "state.json"
-ALWAYS_NOTIFY = True  # True = message every run even if nothing changed; False = only on changes
+ALWAYS_NOTIFY = False  # False = only message on new batches / seats opening (and errors)
+ERROR_ALERT_GAP = 3600  # at most one "checker failed" message per hour
 
 REGION = "central"
 POU = "indore"
@@ -32,7 +33,23 @@ def tg_text(text):
         data={"chat_id": CHAT_ID, "text": text[:4000], "disable_web_page_preview": True},
         timeout=30,
     )
-    print("Telegram text:", r.status_code, r.text[:200])
+    print("Telegram text:", r.status_code)  # status only: keep chat details out of public logs
+
+
+def call_me(text):
+    """Ring the owner on Telegram (CallMeBot). Only runs if the CALLMEBOT_USER secret is set."""
+    user = os.getenv("CALLMEBOT_USER")
+    if not user:
+        return
+    try:
+        r = requests.get(
+            "http://api.callmebot.com/start.php",
+            params={"user": user, "text": text[:250], "rpt": 3, "cc": "no"},
+            timeout=30,
+        )
+        print("CallMeBot:", r.status_code, r.text[:200])
+    except Exception as e:
+        print("CallMeBot failed:", e)
 
 
 def tg_photo(path, caption):
@@ -191,9 +208,8 @@ def check_course(browser, label, course):
     except Exception as e:
         try:
             page.screenshot(path=f"debug_{tag}.png", full_page=True)
-            tg_photo(f"debug_{tag}.png", f"⚠️ Checker failed for {label}: {e}")
         except Exception:
-            tg_text(f"⚠️ Checker failed for {label}: {e}")
+            pass
         raise
     finally:
         context.close()
@@ -209,6 +225,7 @@ def main():
             state = {}
 
     failures = 0
+    errors = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
         for label, course in COURSES:
@@ -217,6 +234,7 @@ def main():
             except Exception as e:
                 print(f"[{label}] FAILED: {e}")
                 failures += 1
+                errors.append(f"{label}: {str(e)[:300]}")
                 continue
 
             prev = state.get(label)           # None on first ever run
@@ -239,6 +257,7 @@ def main():
                 tg_text("\n".join(lines))
             elif alerts:
                 tg_text(f"🔔 ICAI Indore – {label}\n\n" + "\n\n".join(alerts) + f"\n\n{URL}")
+                call_me(f"Alert. New I C A I Indore batch for {label}. Register now.")
             else:
                 print(f"[{label}] no change")
                 if ALWAYS_NOTIFY:
@@ -250,6 +269,10 @@ def main():
                     tg_text("\n".join(lines))
 
             state[label] = current
+
+    if errors and time.time() - state.get("_last_err", 0) > ERROR_ALERT_GAP:
+        tg_text("⚠️ ICAI checker failed:\n" + "\n".join(errors))
+        state["_last_err"] = time.time()
 
     json.dump(state, open(STATE_FILE, "w"), indent=2)
     if failures:
